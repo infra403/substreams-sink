@@ -34,6 +34,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -53,6 +54,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -71,6 +73,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -89,6 +92,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -106,6 +110,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -124,6 +129,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 		{
@@ -143,6 +149,7 @@ func TestAddFlagsToSet(t *testing.T) {
 				FlagExtraHeaders,
 				FlagAPIKeyEnvvar,
 				FlagAPITokenEnvvar,
+				FlagNoopMode,
 			},
 		},
 	}

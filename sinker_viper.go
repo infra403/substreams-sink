@@ -32,6 +32,7 @@ const (
 	FlagExtraHeaders          = "header"
 	FlagAPIKeyEnvvar          = "api-key-envvar"
 	FlagAPITokenEnvvar        = "api-token-envvar"
+	FlagNoopMode              = "noop-mode"
 )
 
 func FlagIgnore(in ...string) FlagIgnored {
@@ -103,6 +104,10 @@ func AddFlagsToSet(flags *pflag.FlagSet, ignore ...FlagIgnored) {
 		flags.Bool(FlagDevelopmentMode, false, "Enable development mode, use it for testing purpose only, should not be used for production workload")
 	}
 
+	if flagIncluded(FlagNoopMode) {
+		flags.Bool(FlagNoopMode, false, "Noop mode, to cache data without producing output when being live")
+	}
+
 	if flagIncluded(FlagFinalBlocksOnly) {
 		flags.Bool(FlagFinalBlocksOnly, false, "Get only final blocks")
 
@@ -156,7 +161,7 @@ func NewFromViper(
 	tracer logging.Tracer,
 	opts ...Option,
 ) (*Sinker, error) {
-	params, network, undoBufferSize, liveBlockTimeDelta, isDevelopmentMode, infiniteRetry, finalBlocksOnly, skipPackageValidation, extraHeaders := getViperFlags(cmd)
+	params, network, undoBufferSize, liveBlockTimeDelta, isDevelopmentMode, infiniteRetry, finalBlocksOnly, skipPackageValidation, isNoopMode, extraHeaders := getViperFlags(cmd)
 
 	zlog.Info("sinker from CLI",
 		zap.String("endpoint", endpoint),
@@ -167,6 +172,7 @@ func NewFromViper(
 		zap.Stringer("expected_module_type", expectedModuleType(expectedOutputModuleType)),
 		zap.String("block_range", blockRange),
 		zap.Bool("development_mode", isDevelopmentMode),
+		zap.Bool("noop_mode", isNoopMode),
 		zap.Bool("infinite_retry", infiniteRetry),
 		zap.Bool("final_blocks_only", finalBlocksOnly),
 		zap.Bool("skip_package_validation", skipPackageValidation),
@@ -239,6 +245,7 @@ func NewFromViper(
 
 	return New(
 		mode,
+		isNoopMode,
 		pkg,
 		module,
 		outputModuleHash,
@@ -258,6 +265,7 @@ func getViperFlags(cmd *cobra.Command) (
 	infiniteRetry bool,
 	finalBlocksOnly bool,
 	skipPackageValidation bool,
+	isNoopMode bool,
 	extraHeaders []string,
 ) {
 	if sflags.FlagDefined(cmd, FlagParams) {
@@ -278,6 +286,10 @@ func getViperFlags(cmd *cobra.Command) (
 
 	if sflags.FlagDefined(cmd, FlagDevelopmentMode) {
 		isDevelopmentMode = sflags.MustGetBool(cmd, FlagDevelopmentMode)
+	}
+
+	if sflags.FlagDefined(cmd, FlagNoopMode) {
+		isNoopMode = sflags.MustGetBool(cmd, FlagNoopMode)
 	}
 
 	if sflags.FlagDefined(cmd, FlagInfiniteRetry) {

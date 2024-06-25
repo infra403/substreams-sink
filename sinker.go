@@ -42,6 +42,7 @@ type Sinker struct {
 
 	// Constructor (ordered)
 	mode             SubstreamsMode
+	NoopMode         bool
 	pkg              *pbsubstreams.Package
 	outputModule     *pbsubstreams.Module
 	outputModuleHash string
@@ -65,6 +66,7 @@ type Sinker struct {
 
 func New(
 	mode SubstreamsMode,
+	NoopMode bool,
 	pkg *pbsubstreams.Package,
 	outputModule *pbsubstreams.Module,
 	hash manifest.ModuleHash,
@@ -84,6 +86,7 @@ func New(
 		outputModule:     outputModule,
 		outputModuleHash: hex.EncodeToString(hash),
 		mode:             mode,
+		NoopMode:         NoopMode,
 		backOff:          bo,
 		stats:            newStats(logger),
 		logger:           logger,
@@ -278,6 +281,7 @@ func (s *Sinker) run(ctx context.Context, cursor *Cursor, handler SinkerHandler)
 			Modules:         s.pkg.Modules,
 			OutputModule:    s.outputModule.Name,
 			ProductionMode:  s.mode == SubstreamsModeProduction,
+			NoopMode:        s.NoopMode,
 		}
 
 		// Add extra headers if set
