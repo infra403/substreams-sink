@@ -51,14 +51,17 @@ func ReadManifestAndModule(
 		return nil, nil, nil, fmt.Errorf("manifest reader %q: %w", manifestPath, err)
 	}
 
-	pkg, graph, err := reader.Read()
+	pkgBundle, err := reader.Read()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("read manifest %q: %w", manifestPath, err)
 	}
 
+	pkg = pkgBundle.Package
+
 	resolvedOutputModuleName := outputModuleName
 	if resolvedOutputModuleName == InferOutputModuleFromPackage {
 		zlog.Debug("inferring module output name from package directly")
+
 		if pkg.SinkModule == "" {
 			return nil, nil, nil, fmt.Errorf("sink module is required in sink config")
 		}
@@ -67,7 +70,7 @@ func ReadManifestAndModule(
 	}
 
 	zlog.Info("finding output module", zap.String("module_name", resolvedOutputModuleName))
-	module, err = graph.Module(resolvedOutputModuleName)
+	module, err = pkgBundle.Graph.Module(resolvedOutputModuleName)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get output module %q: %w", resolvedOutputModuleName, err)
 	}
@@ -87,7 +90,7 @@ func ReadManifestAndModule(
 	}
 
 	hashes := manifest.NewModuleHashes()
-	outputModuleHash, err = hashes.HashModule(pkg.Modules, module, graph)
+	outputModuleHash, err = hashes.HashModule(pkg.Modules, module, pkgBundle.Graph)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("hash module %q: %w", module.Name, err)
 	}
