@@ -291,7 +291,7 @@ func (s *Sinker) run(ctx context.Context, cursor *Cursor, handler SinkerHandler)
 		}
 
 		var receivedMessage bool
-		activeCursor, receivedMessage, err = s.doRequest(streamCtx, activeCursor, req, ssClient, callOpts, handler)
+		activeCursor, receivedMessage, err = s.processRequest(streamCtx, activeCursor, req, ssClient, callOpts, handler)
 
 		// If we received at least one message, we must reset the backoff
 		if receivedMessage {
@@ -584,4 +584,240 @@ func parseHeaders(headers []string) map[string]string {
 		result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 	}
 	return result
+}
+
+func (s *Sinker) processRequest(
+	ctx context.Context,
+	activeCursor *Cursor,
+	req *pbsubstreamsrpc.Request,
+	ssClient pbsubstreamsrpc.StreamClient,
+	callOpts []grpc.CallOption,
+	handler SinkerHandler,
+) (
+	*Cursor,
+	bool,
+	error,
+) {
+	// 创建缓冲区通道和错误通知通道
+	bufferCh := make(chan *pbsubstreamsrpc.BlockScopedData, 100) // 缓冲区大小
+	errCh := make(chan error)                                    // 错误通知通道
+	doneCh := make(chan struct{})                                // 消费结束通知
+
+	// 启动 goroutine 处理缓冲区的数据
+	go func() {
+		defer close(doneCh)
+		for blockScopedData := range bufferCh {
+			cursor, err := NewCursor(blockScopedData.Cursor)
+			if err != nil {
+				errCh <- fmt.Errorf("invalid cursor: %w", err)
+				return
+			}
+
+			var isLive *bool
+			if s.livenessChecker != nil {
+				isLive = &blockNotLive
+				if s.livenessChecker.IsLive(blockScopedData.Clock) {
+					isLive = &liveBlock
+				}
+			}
+
+			if err := handler.HandleBlockScopedData(ctx, blockScopedData, isLive, cursor); err != nil {
+				errCh <- fmt.Errorf("failed to handle BlockScopedData: %w", err)
+				return
+			}
+		}
+	}()
+
+	s.logger.Debug("launching substreams request", zap.Int64("start_block", req.StartBlockNum), zap.Stringer("cursor", activeCursor))
+	receivedMessage := false
+
+	stream, err := ssClient.Blocks(ctx, req, callOpts...)
+	if err != nil {
+		return activeCursor, receivedMessage, retryable(fmt.Errorf("call sf.substreams.rpc.v2.Stream/Blocks: %w", err))
+	}
+
+	for {
+		// 检查错误通道是否有错误
+		select {
+		case err := <-errCh: // 处理中的错误
+			return activeCursor, receivedMessage, err
+		case <-ctx.Done(): // 上下文取消信号
+			return activeCursor, receivedMessage, ctx.Err()
+		default:
+			// 继续处理 stream 数据
+		}
+
+		if s.tracer.Enabled() {
+			s.logger.Debug("substreams waiting to receive message", zap.Stringer("cursor", activeCursor))
+		}
+
+		resp, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return activeCursor, receivedMessage, err
+			}
+
+			if dgrpcError := dgrpc.AsGRPCError(err); dgrpcError != nil {
+				switch dgrpcError.Code() {
+				case codes.Unauthenticated:
+					return activeCursor, receivedMessage, fmt.Errorf("stream failure: %w", err)
+
+				case codes.InvalidArgument:
+					return activeCursor, receivedMessage, fmt.Errorf("stream invalid: %w", err)
+
+				}
+			}
+
+			return activeCursor, receivedMessage, retryable(err)
+		}
+
+		receivedMessage = true
+		MessageSizeBytes.AddInt(proto.Size(resp))
+
+		switch r := resp.Message.(type) {
+		case *pbsubstreamsrpc.Response_Progress:
+			msg := r.Progress
+			var totalProcessedBlocks uint64
+
+			latestEndBlockPerStage := make(map[uint32]uint64)
+			jobsPerStage := make(map[uint32]uint64)
+
+			for _, j := range msg.RunningJobs {
+				totalProcessedBlocks += j.ProcessedBlocks
+				jobEndBlock := j.StartBlock + j.ProcessedBlocks
+				if prevEndBlock, ok := latestEndBlockPerStage[j.Stage]; !ok || jobEndBlock > prevEndBlock {
+					latestEndBlockPerStage[j.Stage] = jobEndBlock
+				}
+				jobsPerStage[j.Stage]++
+			}
+			for k, val := range latestEndBlockPerStage {
+				ProgressMessageLastBlock.SetUint64(val, stageString(k))
+			}
+			for k, val := range jobsPerStage {
+				ProgressMessageRunningJobs.SetUint64(val, stageString(k))
+			}
+
+			stagesModules := make(map[int][]string)
+			for i, stage := range msg.Stages {
+				stagesModules[i] = stage.Modules
+				for j, r := range stage.CompletedRanges {
+					if s.mode == SubstreamsModeProduction && i == len(msg.Stages)-1 { // last stage in production is a mapper. There may be "completed ranges" below the one that includes our start_block
+						if s.requestActiveStartBlock <= r.StartBlock && r.EndBlock >= s.requestActiveStartBlock {
+							ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
+						}
+					} else {
+						if j == 0 {
+							ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
+						}
+					}
+					totalProcessedBlocks += (r.EndBlock - r.StartBlock)
+				}
+			}
+
+			ProgressMessageCount.Inc()
+			// The returned value from the server gives an overview of the current progress and not the delta
+			// since the last message. Since the server is the source of truth, we just set the value directly.
+			ProgressMessageTotalProcessedBlocks.SetUint64(totalProcessedBlocks)
+
+			if s.tracer.Enabled() {
+				s.logger.Debug("received response Progress", zap.Reflect("progress", r))
+			}
+
+		case *pbsubstreamsrpc.Response_BlockScopedData:
+			block := bstream.NewBlockRef(r.BlockScopedData.Clock.Id, r.BlockScopedData.Clock.Number)
+			moduleOutput := r.BlockScopedData.Output
+
+			if s.tracer.Enabled() {
+				s.logger.Debug("received response BlockScopedData", zap.Stringer("at", block), zap.String("module_name", moduleOutput.Name), zap.Int("payload_bytes", len(moduleOutput.MapOutput.Value)))
+			}
+
+			// We record our stats before the buffer action, so user sees state of "stream" and not state of buffer
+			s.stats.RecordBlock(block)
+			HeadBlockNumber.SetUint64(block.Num())
+			HeadBlockTimeDrift.SetBlockTime(r.BlockScopedData.Clock.Timestamp.AsTime())
+			DataMessageCount.Inc()
+			DataMessageSizeBytes.AddInt(proto.Size(r.BlockScopedData))
+			BackprocessingCompletion.SetUint64(1)
+
+			cursor, err := NewCursor(r.BlockScopedData.Cursor)
+			if err != nil {
+				return activeCursor, receivedMessage, fmt.Errorf("invalid received cursor, 'bstream' library in here is probably not up to date: %w", err)
+			}
+
+			activeCursor = cursor
+
+			var dataToProcess []*pbsubstreamsrpc.BlockScopedData
+			if s.buffer == nil {
+				// No buffering, process directly
+				dataToProcess = []*pbsubstreamsrpc.BlockScopedData{r.BlockScopedData}
+			} else {
+				dataToProcess, err = s.buffer.HandleBlockScopedData(r.BlockScopedData)
+				if err != nil {
+					return activeCursor, receivedMessage, fmt.Errorf("buffer add block data: %w", err)
+				}
+			}
+
+			// 将数据放入缓冲区
+			for _, blockScopedData := range dataToProcess {
+				select {
+				case bufferCh <- blockScopedData:
+				case <-ctx.Done():
+					return activeCursor, receivedMessage, ctx.Err()
+				}
+			}
+
+		case *pbsubstreamsrpc.Response_BlockUndoSignal:
+			undoSignal := r.BlockUndoSignal
+			block := bstream.NewBlockRef(undoSignal.LastValidBlock.Id, undoSignal.LastValidBlock.Number)
+
+			if s.tracer.Enabled() {
+				s.logger.Debug("received response BlockUndoSignal", zap.Stringer("last_valid_block", block), zap.String("last_valid_cursor", undoSignal.LastValidCursor))
+			}
+
+			cursor, err := NewCursor(undoSignal.LastValidCursor)
+			if err != nil {
+				return activeCursor, receivedMessage, fmt.Errorf("invalid received cursor, 'bstream' library in here is probably not up to date: %w", err)
+			}
+
+			activeCursor = cursor
+
+			// We record our stats before the buffer action, so user sees state of "stream" and not state of buffer
+			s.stats.RecordBlock(block)
+			UndoMessageCount.Inc()
+			HeadBlockNumber.SetUint64(block.Num())
+			// We don't have the block time in undo case for now, so we don't change it
+
+			if s.buffer == nil {
+				if err := handler.HandleBlockUndoSignal(ctx, r.BlockUndoSignal, activeCursor); err != nil {
+					return activeCursor, receivedMessage, fmt.Errorf("handle BlockUndoSignal: %w", err)
+				}
+			} else {
+				// In the case of dealing with an undo buffer, it's expected that a fork will never
+				// go beyong the first block in the buffer because if it does, `s.buffer.HandleBlockUndoSignal` here
+				// returns an error.
+				//
+				// This means ultimately that we expect to never call the downstream `BlockUndoSignalHandler` function.
+				err = s.buffer.HandleBlockUndoSignal(r.BlockUndoSignal)
+				if err != nil {
+					return activeCursor, receivedMessage, fmt.Errorf("buffer undo block: %w", err)
+				}
+			}
+
+		case *pbsubstreamsrpc.Response_DebugSnapshotData, *pbsubstreamsrpc.Response_DebugSnapshotComplete:
+			s.logger.Warn("received debug snapshot message, there is no reason to receive those here", zap.Reflect("message", r))
+
+		case *pbsubstreamsrpc.Response_Session:
+			s.logger.Info("session initialized with remote endpoint",
+				zap.Uint64("max_parallel_workers", r.Session.MaxParallelWorkers),
+				zap.Uint64("linear_handoff_block", r.Session.LinearHandoffBlock),
+				zap.Uint64("resolved_start_block", r.Session.ResolvedStartBlock),
+				zap.String("trace_id", r.Session.TraceId),
+			)
+			s.requestActiveStartBlock = r.Session.ResolvedStartBlock
+
+		default:
+			s.logger.Info("received unknown type of message", zap.Reflect("message", r))
+			UnknownMessageCount.Inc()
+		}
+	}
 }
