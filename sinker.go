@@ -676,52 +676,53 @@ func (s *Sinker) processRequest(
 
 		switch r := resp.Message.(type) {
 		case *pbsubstreamsrpc.Response_Progress:
-			msg := r.Progress
-			var totalProcessedBlocks uint64
-
-			latestEndBlockPerStage := make(map[uint32]uint64)
-			jobsPerStage := make(map[uint32]uint64)
-
-			for _, j := range msg.RunningJobs {
-				totalProcessedBlocks += j.ProcessedBlocks
-				jobEndBlock := j.StartBlock + j.ProcessedBlocks
-				if prevEndBlock, ok := latestEndBlockPerStage[j.Stage]; !ok || jobEndBlock > prevEndBlock {
-					latestEndBlockPerStage[j.Stage] = jobEndBlock
-				}
-				jobsPerStage[j.Stage]++
-			}
-			for k, val := range latestEndBlockPerStage {
-				ProgressMessageLastBlock.SetUint64(val, stageString(k))
-			}
-			for k, val := range jobsPerStage {
-				ProgressMessageRunningJobs.SetUint64(val, stageString(k))
-			}
-
-			stagesModules := make(map[int][]string)
-			for i, stage := range msg.Stages {
-				stagesModules[i] = stage.Modules
-				for j, r := range stage.CompletedRanges {
-					if s.mode == SubstreamsModeProduction && i == len(msg.Stages)-1 { // last stage in production is a mapper. There may be "completed ranges" below the one that includes our start_block
-						if s.requestActiveStartBlock <= r.StartBlock && r.EndBlock >= s.requestActiveStartBlock {
-							ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
-						}
-					} else {
-						if j == 0 {
-							ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
-						}
-					}
-					totalProcessedBlocks += (r.EndBlock - r.StartBlock)
-				}
-			}
-
-			ProgressMessageCount.Inc()
-			// The returned value from the server gives an overview of the current progress and not the delta
-			// since the last message. Since the server is the source of truth, we just set the value directly.
-			ProgressMessageTotalProcessedBlocks.SetUint64(totalProcessedBlocks)
-
-			if s.tracer.Enabled() {
-				s.logger.Debug("received response Progress", zap.Reflect("progress", r))
-			}
+			continue
+			//msg := r.Progress
+			//var totalProcessedBlocks uint64
+			//
+			//latestEndBlockPerStage := make(map[uint32]uint64)
+			//jobsPerStage := make(map[uint32]uint64)
+			//
+			//for _, j := range msg.RunningJobs {
+			//	totalProcessedBlocks += j.ProcessedBlocks
+			//	jobEndBlock := j.StartBlock + j.ProcessedBlocks
+			//	if prevEndBlock, ok := latestEndBlockPerStage[j.Stage]; !ok || jobEndBlock > prevEndBlock {
+			//		latestEndBlockPerStage[j.Stage] = jobEndBlock
+			//	}
+			//	jobsPerStage[j.Stage]++
+			//}
+			//for k, val := range latestEndBlockPerStage {
+			//	ProgressMessageLastBlock.SetUint64(val, stageString(k))
+			//}
+			//for k, val := range jobsPerStage {
+			//	ProgressMessageRunningJobs.SetUint64(val, stageString(k))
+			//}
+			//
+			//stagesModules := make(map[int][]string)
+			//for i, stage := range msg.Stages {
+			//	stagesModules[i] = stage.Modules
+			//	for j, r := range stage.CompletedRanges {
+			//		if s.mode == SubstreamsModeProduction && i == len(msg.Stages)-1 { // last stage in production is a mapper. There may be "completed ranges" below the one that includes our start_block
+			//			if s.requestActiveStartBlock <= r.StartBlock && r.EndBlock >= s.requestActiveStartBlock {
+			//				ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
+			//			}
+			//		} else {
+			//			if j == 0 {
+			//				ProgressMessageLastContiguousBlock.SetUint64(r.EndBlock, stageString(uint32(i)))
+			//			}
+			//		}
+			//		totalProcessedBlocks += (r.EndBlock - r.StartBlock)
+			//	}
+			//}
+			//
+			//ProgressMessageCount.Inc()
+			//// The returned value from the server gives an overview of the current progress and not the delta
+			//// since the last message. Since the server is the source of truth, we just set the value directly.
+			//ProgressMessageTotalProcessedBlocks.SetUint64(totalProcessedBlocks)
+			//
+			//if s.tracer.Enabled() {
+			//	s.logger.Debug("received response Progress", zap.Reflect("progress", r))
+			//}
 
 		case *pbsubstreamsrpc.Response_BlockScopedData:
 			block := bstream.NewBlockRef(r.BlockScopedData.Clock.Id, r.BlockScopedData.Clock.Number)
