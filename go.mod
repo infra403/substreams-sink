@@ -1,4 +1,4 @@
-module github.com/streamingfast/substreams-sink
+module github.com/infra403/substreams-sink
 
 go 1.21
 
