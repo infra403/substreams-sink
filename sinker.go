@@ -192,7 +192,7 @@ func (s *Sinker) Run(ctx context.Context, cursor *Cursor, handler SinkerHandler)
 		logEach = 5 * time.Second
 	}
 
-	s.stats.Start(logEach)
+	//s.stats.Start(logEach)
 
 	fields := []zap.Field{zap.Duration("stats_refresh_each", logEach)}
 	if cursor != nil {
