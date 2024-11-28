@@ -2,8 +2,6 @@ module github.com/infra403/substreams-sink
 
 go 1.21
 
-toolchain go1.21.1
-
 require (
 	github.com/bobg/go-generics/v2 v2.2.2
 	github.com/cenkalti/backoff/v4 v4.2.1
