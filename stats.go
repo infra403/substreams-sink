@@ -39,23 +39,23 @@ func (s *Stats) RecordBlock(block bstream.BlockRef) {
 }
 
 func (s *Stats) Start(each time.Duration) {
-	if s.IsTerminating() || s.IsTerminated() {
-		panic("already shutdown, refusing to start again")
-	}
-
-	go func() {
-		ticker := time.NewTicker(each)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				s.LogNow()
-			case <-s.Terminating():
-				return
-			}
-		}
-	}()
+	//if s.IsTerminating() || s.IsTerminated() {
+	//	panic("already shutdown, refusing to start again")
+	//}
+	//
+	//go func() {
+	//	ticker := time.NewTicker(each)
+	//	defer ticker.Stop()
+	//
+	//	for {
+	//		select {
+	//		case <-ticker.C:
+	//			s.LogNow()
+	//		case <-s.Terminating():
+	//			return
+	//		}
+	//	}
+	//}()
 }
 
 func (s *Stats) LogNow() {
